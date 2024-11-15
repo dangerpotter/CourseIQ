@@ -17,6 +17,10 @@ CourseIQ is a sophisticated course analysis tool that transforms complex course 
 - 📝 Detailed activity analysis and breakdown
 - 📈 Weekly content distribution insights
 - 🎯 Competency mapping and tracking
+- 🔍 Advanced file search and filtering
+- 📦 Batch processing capabilities
+- 🏷️ Intelligent file organization by course type
+- 💾 Automatic file cleanup and management
 
 ## Getting Started
 
@@ -85,8 +89,11 @@ courseiq/
 ├── server/                # Backend Node.js server
 │   ├── src/
 │   │   ├── data_transformer.js  # Course transformation logic
+│   │   ├── fileManager.js       # File management system
+│   │   ├── batchProcessor.js    # Batch processing logic
 │   │   └── index.js            # Server entry point
-│   └── output/           # Transformed JSON output directory
+│   ├── output/           # Transformed JSON output directory
+│   └── uploads/          # Temporary upload directory
 │
 └── README.md             # Project documentation
 ```
@@ -102,10 +109,24 @@ courseiq/
   - Generates detailed analytics
   - Manages file operations
 
+- `fileManager.js`: Enhanced file management system
+
+  - Handles file organization and search
+  - Caches file metadata for performance
+  - Provides filtering and sorting capabilities
+
+- `batchProcessor.js`: Batch processing functionality
+
+  - Handles concurrent file processing
+  - Manages processing queues
+  - Provides progress tracking
+  - Implements error handling
+
 - `index.js`: Express server setup
   - API endpoints for file operations
   - File upload handling
   - Data transformation routing
+  - Batch processing coordination
 
 ### Client-side
 
@@ -114,6 +135,8 @@ courseiq/
   - File upload interface
   - Navigation and layout
   - Data visualization coordination
+  - Batch processing interface
+  - File management UI
 
 - `Analytics.jsx`: Analytics visualization component
   - Interactive charts and graphs
@@ -122,10 +145,13 @@ courseiq/
 
 ## API Endpoints
 
-- `POST /api/transform`: Transform uploaded course JSON
-- `GET /api/files`: List transformed files
+- `POST /api/transform`: Transform single course JSON
+- `POST /api/transform/batch`: Transform multiple course JSONs
+- `GET /api/files`: List transformed files with search and filter options
 - `GET /api/files/:filename`: Get specific transformed file
+- `GET /api/files/:filename/metadata`: Get file metadata
 - `GET /api/download/:filename`: Download transformed file
+- `DELETE /api/files/:filename`: Delete transformed file
 
 ## Technology Stack
 
