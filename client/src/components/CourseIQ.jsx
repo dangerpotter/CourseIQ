@@ -21,10 +21,21 @@ import {
   ChevronDown,
   Coins,
   LayersIcon,
+  PenTool,
+  Layers,
 } from "lucide-react";
 import Analytics from "./Analytics";
 
+const stripHtmlTags = (html) => {
+  if (!html) return "";
+  return html
+    .replace(/<[^>]*>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .trim();
+};
+
 const CourseIQ = () => {
+  // State declarations
   const [sourceData, setSourceData] = useState(null);
   const [transformedData, setTransformedData] = useState(null);
   const [error, setError] = useState(null);
@@ -35,6 +46,48 @@ const CourseIQ = () => {
   const [transformedFiles, setTransformedFiles] = useState([]);
   const [activityFilter, setActivityFilter] = useState("all");
   const [expandedActivity, setExpandedActivity] = useState(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [sortBy, setSortBy] = useState("date");
+  const [sortOrder, setSortOrder] = useState("desc");
+  const [fileFilter, setFileFilter] = useState({
+    dateRange: null,
+    courseType: null,
+  });
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [batchProgress, setBatchProgress] = useState(null);
+
+  // BatchProgress component
+  const BatchProgress = ({ progress }) => {
+    if (!progress) return null;
+
+    return (
+      <div className="mt-4 space-y-2">
+        <div className="flex justify-between text-sm">
+          <span>Processing files:</span>
+          <span>
+            {progress.processed} / {progress.total}
+          </span>
+        </div>
+        <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+          <div
+            className="bg-blue-500 h-2 rounded-full transition-all"
+            style={{ width: `${(progress.processed / progress.total) * 100}%` }}
+          />
+        </div>
+        {progress.successful.length > 0 && (
+          <div className="text-sm text-green-500">
+            Successfully processed: {progress.successful.length}
+          </div>
+        )}
+        {progress.failed.length > 0 && (
+          <div className="text-sm text-red-500">
+            Failed: {progress.failed.length}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const toggleActivityDetails = (activityId) => {
     setExpandedActivity(expandedActivity === activityId ? null : activityId);
@@ -49,22 +102,79 @@ const CourseIQ = () => {
   // Fetch transformed files
   const fetchTransformedFiles = async () => {
     try {
-      const response = await fetch("http://localhost:3000/api/files");
+      const queryParams = new URLSearchParams({
+        search: searchTerm,
+        sortBy,
+        sortOrder,
+        page: currentPage,
+        limit: 20,
+        ...(fileFilter.dateRange && {
+          dateRange: JSON.stringify(fileFilter.dateRange),
+        }),
+        ...(fileFilter.courseType && { courseType: fileFilter.courseType }),
+      });
+
+      const response = await fetch(
+        `http://localhost:3000/api/files?${queryParams}`
+      );
       const data = await response.json();
+
       if (data.success) {
-        setTransformedFiles(data.files);
+        let files = data.files || [];
+
+        // Sort files based on selected criteria
+        files = files.sort((a, b) => {
+          const fileA = typeof a === "string" ? a : a.filename;
+          const fileB = typeof b === "string" ? b : b.filename;
+
+          switch (sortBy) {
+            case "name":
+              // Extract course number and sort
+              const courseNumA = fileA.match(/([A-Z]+\d+)/)?.[1] || "";
+              const courseNumB = fileB.match(/([A-Z]+\d+)/)?.[1] || "";
+              return sortOrder === "asc"
+                ? courseNumA.localeCompare(courseNumB)
+                : courseNumB.localeCompare(courseNumA);
+
+            case "date":
+              const dateA = new Date(a.metadata?.lastUpdated || 0);
+              const dateB = new Date(b.metadata?.lastUpdated || 0);
+              return sortOrder === "asc" ? dateA - dateB : dateB - dateA;
+
+            case "type":
+              const typeA = getCourseType(a.metadata?.courseDesignModel || "");
+              const typeB = getCourseType(b.metadata?.courseDesignModel || "");
+              return sortOrder === "asc"
+                ? typeA.localeCompare(typeB)
+                : typeB.localeCompare(typeA);
+
+            default:
+              return 0;
+          }
+        });
+
+        setTransformedFiles(files);
+        setTotalPages(data.totalPages || 1);
       }
     } catch (error) {
       console.error("Error fetching files:", error);
+      setError("Failed to fetch transformed files");
     }
+  };
+
+  // Add this helper function
+  const getCourseType = (designModel = "") => {
+    if (designModel.includes("GUIDED_PATH")) return "Guided Path";
+    if (designModel.includes("FLEX_PATH")) return "Flex Path";
+    return "Custom";
   };
 
   // Initial fetch of transformed files
   useEffect(() => {
     fetchTransformedFiles();
-  }, []);
+  }, [searchTerm, sortBy, sortOrder, currentPage, fileFilter]);
 
-  // Handle file upload
+  // Handle single file upload
   const handleFileUpload = async (event) => {
     try {
       const file = event.target.files[0];
@@ -91,7 +201,6 @@ const CourseIQ = () => {
       });
 
       const result = await response.json();
-      console.log("API Response:", result);
 
       if (result.success) {
         console.log("Setting transformed data:", result.data);
@@ -105,7 +214,62 @@ const CourseIQ = () => {
       setError(err.message);
     } finally {
       setIsLoading(false);
-      // Clear the file input
+      event.target.value = "";
+    }
+  };
+
+  // Handle batch file upload
+  const handleBatchUpload = async (event) => {
+    try {
+      const files = Array.from(event.target.files);
+      if (files.length === 0) return;
+
+      // Check for output files
+      if (files.some((file) => file.name.includes("_output.json"))) {
+        setError(
+          "Please select only source JSON files, not transformed output files."
+        );
+        return;
+      }
+
+      setIsLoading(true);
+      setError(null);
+      setBatchProgress({
+        processed: 0,
+        total: files.length,
+        successful: [],
+        failed: [],
+      });
+
+      const formData = new FormData();
+      files.forEach((file) => formData.append("files", file));
+
+      const response = await fetch(
+        "http://localhost:3000/api/transform/batch",
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
+
+      const result = await response.json();
+
+      if (result.success) {
+        setBatchProgress({
+          processed: result.results.totalProcessed,
+          total: files.length,
+          successful: result.results.successful,
+          failed: result.results.failed,
+        });
+        fetchTransformedFiles();
+      } else {
+        setError(result.error || "Batch processing failed");
+      }
+    } catch (err) {
+      console.error("Error during batch processing:", err);
+      setError(err.message);
+    } finally {
+      setIsLoading(false);
       event.target.value = "";
     }
   };
@@ -184,29 +348,103 @@ const CourseIQ = () => {
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-0">
+                <div className="p-4 border-b border-gray-200 dark:border-gray-700">
+                  <input
+                    type="text"
+                    placeholder="Search files..."
+                    className="w-full p-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                  />
+                  <div className="mt-2 space-y-2">
+                    <select
+                      className="w-full p-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
+                      value={sortBy}
+                      onChange={(e) => setSortBy(e.target.value)}
+                    >
+                      <option value="date">Sort by Date</option>
+                      <option value="name">Sort by Name</option>
+                      <option value="type">Sort by Type</option>
+                    </select>
+                    <select
+                      className="w-full p-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
+                      value={fileFilter.courseType || ""}
+                      onChange={(e) =>
+                        setFileFilter({
+                          ...fileFilter,
+                          courseType: e.target.value || null,
+                        })
+                      }
+                    >
+                      <option value="">All Course Types</option>
+                      <option value="guided">Guided Path</option>
+                      <option value="flex">Flex Path</option>
+                      <option value="custom">Custom</option>
+                    </select>
+                  </div>
+                </div>
                 <div className="divide-y divide-gray-200 dark:divide-gray-700">
                   {transformedFiles.length === 0 ? (
                     <p className="text-sm text-gray-500 dark:text-gray-400 p-4">
                       No transformed files yet
                     </p>
                   ) : (
-                    transformedFiles.map((filename) => (
-                      <div
-                        key={filename}
-                        className="flex items-center justify-between p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50"
-                      >
-                        <div className="flex flex-col flex-1 min-w-0">
-                          <span className="text-sm font-medium truncate">
-                            {filename}
-                          </span>
-                          <span className="text-xs text-gray-500 dark:text-gray-400">
-                            {filename.includes("_output.json")
-                              ? "Transformed Output"
-                              : "Source File"}
-                          </span>
-                        </div>
-                        <div className="flex gap-2">
-                          {filename.includes("_output.json") && (
+                    transformedFiles.map((file) => {
+                      const filename =
+                        typeof file === "string" ? file : file.filename;
+
+                      // Get identifier from filename
+                      const identifierMatch =
+                        filename.match(/_(\d+)_output\.json$/);
+                      const identifier = identifierMatch?.[1] || "";
+
+                      // If we have access to the file data, use that, otherwise use filename parsing
+                      let courseNumber = filename;
+                      let courseType = "Unknown";
+
+                      if (file.metadata?.courseDesignModel) {
+                        courseType = file.metadata.courseDesignModel.includes(
+                          "FLEX_PATH"
+                        )
+                          ? "Flex Path"
+                          : "Guided Path";
+                      }
+
+                      if (file.courseName) {
+                        courseNumber = file.courseNumber || courseNumber;
+                      }
+
+                      return (
+                        <div
+                          key={filename}
+                          className="flex items-center justify-between p-4 hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                        >
+                          <div className="flex flex-col flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium">
+                                {courseNumber}
+                              </span>
+                              {identifier && (
+                                <span className="text-xs text-gray-500 dark:text-gray-400">
+                                  #{identifier}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center mt-1">
+                              <div className="w-24">
+                                <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/50 text-blue-800 dark:text-blue-200">
+                                  {courseType}
+                                </span>
+                              </div>
+                              {/* Date with consistent alignment */}
+                              <span className="text-xs text-gray-500 dark:text-gray-400">
+                                {new Date(
+                                  file.metadata?.lastUpdated
+                                ).toLocaleDateString()}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
                             <Button
                               variant="outline"
                               size="sm"
@@ -215,19 +453,46 @@ const CourseIQ = () => {
                             >
                               View
                             </Button>
-                          )}
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => downloadTransformedFile(filename)}
-                          >
-                            <Download className="h-4 w-4" />
-                          </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => downloadTransformedFile(filename)}
+                            >
+                              <Download className="h-4 w-4" />
+                            </Button>
+                          </div>
                         </div>
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
+                {transformedFiles.length > 0 && (
+                  <div className="p-4 border-t border-gray-200 dark:border-gray-700">
+                    <div className="flex justify-between items-center">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          setCurrentPage((prev) => Math.max(prev - 1, 1))
+                        }
+                        disabled={currentPage === 1}
+                      >
+                        Previous
+                      </Button>
+                      <span className="text-sm text-gray-500">
+                        Page {currentPage} of {totalPages}
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setCurrentPage((prev) => prev + 1)}
+                        disabled={currentPage === totalPages}
+                      >
+                        Next
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </div>
@@ -251,12 +516,13 @@ const CourseIQ = () => {
                         ) : (
                           <Upload size={24} />
                         )}
-                        {isLoading ? "Processing..." : "Select Source JSON"}
+                        {isLoading ? "Processing..." : "Select Files"}
                       </span>
                       <input
                         type="file"
                         accept=".json"
-                        onChange={handleFileUpload}
+                        multiple
+                        onChange={handleBatchUpload}
                         className="absolute inset-0 opacity-0 cursor-pointer"
                         disabled={isLoading}
                       />
@@ -275,6 +541,8 @@ const CourseIQ = () => {
                       </div>
                     )}
                   </div>
+
+                  <BatchProgress progress={batchProgress} />
 
                   {error && (
                     <Alert variant="destructive">
@@ -593,7 +861,7 @@ const CourseIQ = () => {
                               <CardTitle className="text-xl mb-2">{`Week ${week.weekNumber}: ${week.title}`}</CardTitle>
                               {week.introduction && (
                                 <p className="text-sm text-gray-600 dark:text-gray-300 mt-2">
-                                  {week.introduction.text}
+                                  {stripHtmlTags(week.introduction.text)}
                                 </p>
                               )}
                             </div>
@@ -811,17 +1079,19 @@ const CourseIQ = () => {
                 {/* Activities Tab */}
                 <TabsContent value="activities">
                   {/* Activity Type Filter */}
-                  <div className="mb-6 flex gap-2">
+                  <div className="mb-6 flex flex-wrap gap-2">
                     <Button
-                      variant="outline"
+                      variant={activityFilter === "all" ? "default" : "outline"}
                       className="gap-2"
                       onClick={() => setActivityFilter("all")}
                     >
-                      <LayersIcon className="h-4 w-4" />
+                      <Layers className="h-4 w-4" />
                       All Types
                     </Button>
                     <Button
-                      variant="outline"
+                      variant={
+                        activityFilter === "study" ? "default" : "outline"
+                      }
                       className="gap-2"
                       onClick={() => setActivityFilter("study")}
                     >
@@ -829,7 +1099,9 @@ const CourseIQ = () => {
                       Study
                     </Button>
                     <Button
-                      variant="outline"
+                      variant={
+                        activityFilter === "discussion" ? "default" : "outline"
+                      }
                       className="gap-2"
                       onClick={() => setActivityFilter("discussion")}
                     >
@@ -837,230 +1109,266 @@ const CourseIQ = () => {
                       Discussion
                     </Button>
                     <Button
-                      variant="outline"
+                      variant={
+                        activityFilter === "assignment" ? "default" : "outline"
+                      }
                       className="gap-2"
                       onClick={() => setActivityFilter("assignment")}
                     >
                       <FileText className="h-4 w-4" />
                       Assignment
                     </Button>
+                    <Button
+                      variant={
+                        activityFilter === "quiz" ? "default" : "outline"
+                      }
+                      className="gap-2"
+                      onClick={() => setActivityFilter("quiz")}
+                    >
+                      <PenTool className="h-4 w-4" />
+                      Quiz
+                    </Button>
                   </div>
 
                   <div className="grid grid-cols-1 gap-6">
-                    {transformedData.weeks.map((week) => (
-                      <Card
-                        key={week.weekNumber}
-                        className="bg-white dark:bg-gray-800 shadow-lg"
-                      >
-                        <CardHeader className="border-b border-gray-200 dark:border-gray-700">
-                          <div className="flex justify-between items-center">
-                            <CardTitle className="text-xl">
-                              Week {week.weekNumber}: {week.title}
-                            </CardTitle>
-                            <div className="flex items-center gap-4">
-                              <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
-                                <LayersIcon className="h-4 w-4" />
-                                {week.activities.length} Activities
-                              </div>
-                              <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
-                                <Coins className="h-4 w-4" />
-                                {week.activities.reduce(
-                                  (sum, a) => sum + (a.gradePoints || 0),
-                                  0
-                                )}{" "}
-                                Points
+                    {transformedData.weeks.map((week) => {
+                      // Filter activities based on selected type
+                      const filteredActivities = week.activities.filter(
+                        (activity) =>
+                          activityFilter === "all" ||
+                          activity.activityType.toLowerCase() ===
+                            activityFilter.toLowerCase()
+                      );
+
+                      // Only show weeks that have activities after filtering
+                      if (filteredActivities.length === 0) return null;
+
+                      return (
+                        <Card
+                          key={week.weekNumber}
+                          className="bg-white dark:bg-gray-800 shadow-lg"
+                        >
+                          <CardHeader className="border-b border-gray-200 dark:border-gray-700">
+                            <div className="flex justify-between items-center">
+                              <CardTitle className="text-xl">
+                                Week {week.weekNumber}: {week.title}
+                              </CardTitle>
+                              <div className="flex items-center gap-4">
+                                <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+                                  <Layers className="h-4 w-4" />
+                                  {filteredActivities.length} Activities
+                                </div>
+                                <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+                                  <Coins className="h-4 w-4" />
+                                  {filteredActivities.reduce(
+                                    (sum, a) => sum + (a.gradePoints || 0),
+                                    0
+                                  )}{" "}
+                                  Points
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        </CardHeader>
-                        <CardContent className="p-6">
-                          <div className="space-y-6">
-                            {week.activities.map((activity) => (
-                              <div
-                                key={activity.id}
-                                className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden"
-                              >
-                                {/* Activity Header */}
-                                <div className="bg-gray-50 dark:bg-gray-700/50 p-4 flex justify-between items-start">
-                                  <div className="flex items-start gap-4">
-                                    <div
-                                      className={`
-                                      p-2 rounded-lg 
-                                      ${
-                                        activity.activityType.toLowerCase() ===
-                                        "study"
-                                          ? "bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300"
-                                          : ""
-                                      }
-                                      ${
-                                        activity.activityType.toLowerCase() ===
-                                        "discussion"
-                                          ? "bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300"
-                                          : ""
-                                      }
-                                      ${
-                                        activity.activityType.toLowerCase() ===
-                                        "assignment"
-                                          ? "bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300"
-                                          : ""
-                                      }
-                                    `}
-                                    >
-                                      {activity.activityType.toLowerCase() ===
-                                        "study" && (
-                                        <BookOpen className="h-5 w-5" />
-                                      )}
-                                      {activity.activityType.toLowerCase() ===
-                                        "discussion" && (
-                                        <MessageCircle className="h-5 w-5" />
-                                      )}
-                                      {activity.activityType.toLowerCase() ===
-                                        "assignment" && (
-                                        <FileText className="h-5 w-5" />
-                                      )}
-                                    </div>
-                                    <div>
-                                      <h3 className="font-medium text-lg">
-                                        {activity.title}
-                                      </h3>
-                                      <div className="flex items-center gap-3 mt-1">
-                                        <span className="text-sm font-mono text-gray-500 dark:text-gray-400">
-                                          {activity.code}
-                                        </span>
-                                        {activity.gradePoints > 0 && (
-                                          <span className="text-sm bg-yellow-100 dark:bg-yellow-900/50 text-yellow-800 dark:text-yellow-200 px-2 py-1 rounded">
-                                            {activity.gradePoints} Points
-                                          </span>
+                          </CardHeader>
+                          <CardContent className="p-6">
+                            <div className="space-y-6">
+                              {filteredActivities.map((activity) => (
+                                <div
+                                  key={activity.id}
+                                  className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden"
+                                >
+                                  {/* Activity Header */}
+                                  <div className="bg-gray-50 dark:bg-gray-700/50 p-4 flex justify-between items-start">
+                                    <div className="flex items-start gap-4">
+                                      <div
+                                        className={`
+                                        p-2 rounded-lg 
+                                        ${
+                                          activity.activityType.toLowerCase() ===
+                                          "study"
+                                            ? "bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300"
+                                            : ""
+                                        }
+                                        ${
+                                          activity.activityType.toLowerCase() ===
+                                          "discussion"
+                                            ? "bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300"
+                                            : ""
+                                        }
+                                        ${
+                                          activity.activityType.toLowerCase() ===
+                                          "assignment"
+                                            ? "bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300"
+                                            : ""
+                                        }
+                                        ${
+                                          activity.activityType.toLowerCase() ===
+                                          "quiz"
+                                            ? "bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300"
+                                            : ""
+                                        }
+                                      `}
+                                      >
+                                        {activity.activityType.toLowerCase() ===
+                                          "study" && (
+                                          <BookOpen className="h-5 w-5" />
+                                        )}
+                                        {activity.activityType.toLowerCase() ===
+                                          "discussion" && (
+                                          <MessageCircle className="h-5 w-5" />
+                                        )}
+                                        {activity.activityType.toLowerCase() ===
+                                          "assignment" && (
+                                          <FileText className="h-5 w-5" />
+                                        )}
+                                        {activity.activityType.toLowerCase() ===
+                                          "quiz" && (
+                                          <PenTool className="h-5 w-5" />
                                         )}
                                       </div>
+                                      <div>
+                                        <h3 className="font-medium text-lg">
+                                          {activity.title}
+                                        </h3>
+                                        <div className="flex items-center gap-3 mt-1">
+                                          <span className="text-sm font-mono text-gray-500 dark:text-gray-400">
+                                            {activity.code}
+                                          </span>
+                                          {activity.gradePoints > 0 && (
+                                            <span className="text-sm bg-yellow-100 dark:bg-yellow-900/50 text-yellow-800 dark:text-yellow-200 px-2 py-1 rounded">
+                                              {activity.gradePoints} Points
+                                            </span>
+                                          )}
+                                        </div>
+                                      </div>
                                     </div>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() =>
+                                        toggleActivityDetails(activity.id)
+                                      }
+                                    >
+                                      <ChevronDown className="h-4 w-4" />
+                                    </Button>
                                   </div>
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() =>
-                                      toggleActivityDetails(activity.id)
-                                    }
-                                  >
-                                    <ChevronDown className="h-4 w-4" />
-                                  </Button>
-                                </div>
 
-                                {/* Activity Details (Expandable) */}
-                                {expandedActivity === activity.id && (
-                                  <div className="p-4 border-t border-gray-200 dark:border-gray-700">
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                      {/* Left Column */}
-                                      <div className="space-y-4">
-                                        {/* Activity Text */}
-                                        {activity.text && (
-                                          <div>
-                                            <h4 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">
-                                              Activity Description
-                                            </h4>
-                                            <div
-                                              className="prose dark:prose-invert max-w-none"
-                                              dangerouslySetInnerHTML={{
-                                                __html: activity.text,
-                                              }}
-                                            />
-                                          </div>
-                                        )}
-
-                                        {/* Competencies */}
-                                        {activity.competencies &&
-                                          activity.competencies.length > 0 && (
+                                  {/* Activity Details (Expandable) */}
+                                  {expandedActivity === activity.id && (
+                                    <div className="p-4 border-t border-gray-200 dark:border-gray-700">
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                        {/* Left Column */}
+                                        <div className="space-y-4">
+                                          {/* Activity Text */}
+                                          {activity.text && (
                                             <div>
                                               <h4 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">
-                                                Competencies Addressed
+                                                Activity Description
                                               </h4>
-                                              <div className="space-y-2">
-                                                {activity.competencies.map(
-                                                  (compId) => {
-                                                    const comp =
-                                                      transformedData.competencies.find(
-                                                        (c) => c.id === compId
-                                                      );
-                                                    return (
-                                                      comp && (
-                                                        <div
-                                                          key={compId}
-                                                          className="text-sm bg-gray-100 dark:bg-gray-800 p-2 rounded"
-                                                        >
-                                                          {comp.text}
-                                                        </div>
-                                                      )
-                                                    );
-                                                  }
-                                                )}
-                                              </div>
+                                              <div
+                                                className="prose dark:prose-invert max-w-none"
+                                                dangerouslySetInnerHTML={{
+                                                  __html: activity.text,
+                                                }}
+                                              />
                                             </div>
                                           )}
-                                      </div>
 
-                                      {/* Right Column */}
-                                      <div className="space-y-4">
-                                        {/* Grading Details */}
-                                        {activity.scoringGuide && (
-                                          <div>
-                                            <h4 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">
-                                              Scoring Guide
-                                            </h4>
-                                            <div className="space-y-2">
-                                              {activity.scoringGuide.criteria.map(
-                                                (criterion) => (
-                                                  <div
-                                                    key={criterion.id}
-                                                    className="bg-gray-100 dark:bg-gray-800 p-3 rounded"
-                                                  >
-                                                    <p className="text-sm font-medium mb-1">
-                                                      {criterion.text}
-                                                    </p>
-                                                    <p className="text-sm text-gray-500 dark:text-gray-400">
-                                                      Points:{" "}
-                                                      {criterion.gradePoints}
-                                                    </p>
-                                                  </div>
-                                                )
-                                              )}
-                                            </div>
-                                          </div>
-                                        )}
+                                          {/* Competencies */}
+                                          {activity.competencies &&
+                                            activity.competencies.length >
+                                              0 && (
+                                              <div>
+                                                <h4 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">
+                                                  Competencies Addressed
+                                                </h4>
+                                                <div className="space-y-2">
+                                                  {activity.competencies.map(
+                                                    (compId) => {
+                                                      const comp =
+                                                        transformedData.competencies.find(
+                                                          (c) => c.id === compId
+                                                        );
+                                                      return (
+                                                        comp && (
+                                                          <div
+                                                            key={compId}
+                                                            className="text-sm bg-gray-100 dark:bg-gray-800 p-2 rounded"
+                                                          >
+                                                            {comp.text}
+                                                          </div>
+                                                        )
+                                                      );
+                                                    }
+                                                  )}
+                                                </div>
+                                              </div>
+                                            )}
+                                        </div>
 
-                                        {/* Resources */}
-                                        {activity.resources &&
-                                          activity.resources.length > 0 && (
+                                        {/* Right Column */}
+                                        <div className="space-y-4">
+                                          {/* Grading Details */}
+                                          {activity.scoringGuide && (
                                             <div>
                                               <h4 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">
-                                                Activity Resources
+                                                Scoring Guide
                                               </h4>
                                               <div className="space-y-2">
-                                                {activity.resources.map(
-                                                  (resource) => (
+                                                {activity.scoringGuide.criteria.map(
+                                                  (criterion) => (
                                                     <div
-                                                      key={resource.id}
-                                                      className="flex items-center gap-2 bg-gray-100 dark:bg-gray-800 p-2 rounded"
+                                                      key={criterion.id}
+                                                      className="bg-gray-100 dark:bg-gray-800 p-3 rounded"
                                                     >
-                                                      <FileText className="h-4 w-4 text-gray-400" />
-                                                      <span className="text-sm">
-                                                        {resource.name}
-                                                      </span>
+                                                      <p className="text-sm font-medium mb-1">
+                                                        {criterion.text}
+                                                      </p>
+                                                      <p className="text-sm text-gray-500 dark:text-gray-400">
+                                                        Points:{" "}
+                                                        {criterion.gradePoints}
+                                                      </p>
                                                     </div>
                                                   )
                                                 )}
                                               </div>
                                             </div>
                                           )}
+
+                                          {/* Resources */}
+                                          {activity.resources &&
+                                            activity.resources.length > 0 && (
+                                              <div>
+                                                <h4 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">
+                                                  Activity Resources
+                                                </h4>
+                                                <div className="space-y-2">
+                                                  {activity.resources.map(
+                                                    (resource) => (
+                                                      <div
+                                                        key={resource.id}
+                                                        className="flex items-center gap-2 bg-gray-100 dark:bg-gray-800 p-2 rounded"
+                                                      >
+                                                        <FileText className="h-4 w-4 text-gray-400" />
+                                                        <span className="text-sm">
+                                                          {resource.name}
+                                                        </span>
+                                                      </div>
+                                                    )
+                                                  )}
+                                                </div>
+                                              </div>
+                                            )}
+                                        </div>
                                       </div>
                                     </div>
-                                  </div>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        </CardContent>
-                      </Card>
-                    ))}
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
                   </div>
                 </TabsContent>
 

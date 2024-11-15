@@ -1,3 +1,4 @@
+// Imports
 const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
@@ -7,12 +8,23 @@ const {
   CourseTransformer,
   validateTransformedData,
 } = require("./data_transformer");
+const BatchProcessor = require("./batchProcessor");
+const FileManager = require("./fileManager");
+
+// Initialize Express app
+const app = express();
 
 // Configuration
 const CONFIG = {
-  outputDir: path.join(__dirname, "..", "..", "output"),
+  outputDir: path.join(__dirname, "..", "output"),
+  uploadsDir: path.join(__dirname, "..", "uploads"),
   createBackup: true,
   validateActivities: true,
+  batchProcessing: {
+    concurrentLimit: 3,
+    maxFileSize: 50 * 1024 * 1024, // 50MB
+    maxFiles: 10,
+  },
   activityValidation: {
     requireText: true,
     validateSequencing: true,
@@ -21,12 +33,120 @@ const CONFIG = {
     enforceTypeOrder: true,
   },
   detailedLogging: true,
+  caching: {
+    enabled: true,
+    duration: 5 * 60 * 1000, // 5 minutes
+  },
 };
 
-// Helper function to create timestamp
-const getTimestamp = () => {
-  return new Date().toISOString().replace(/[:.]/g, "-");
+// Initialize file manager
+const fileManager = new FileManager(CONFIG.outputDir);
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, CONFIG.uploadsDir);
+  },
+  filename: (req, file, cb) => {
+    const sanitizedName = file.originalname.replace(/[^a-zA-Z0-9.]/g, "_");
+    cb(null, `${Date.now()}-${sanitizedName}`);
+  },
+});
+
+// Error handling middleware
+const handleUploadError = (err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    if (err.code === "LIMIT_FILE_SIZE") {
+      return res.status(400).json({
+        success: false,
+        error: `File size exceeds limit of ${
+          CONFIG.batchProcessing.maxFileSize / (1024 * 1024)
+        }MB`,
+      });
+    }
+    if (err.code === "LIMIT_FILE_COUNT") {
+      return res.status(400).json({
+        success: false,
+        error: `Maximum number of files (${CONFIG.batchProcessing.maxFiles}) exceeded`,
+      });
+    }
+  }
+  next(err);
 };
+
+app.use(handleUploadError);
+
+// Multer configuration for single file uploads
+const singleUpload = multer({
+  storage: storage,
+  limits: {
+    fileSize: CONFIG.batchProcessing.maxFileSize,
+  },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype === "application/json") {
+      cb(null, true);
+    } else {
+      cb(new Error("Only JSON files are allowed"));
+    }
+  },
+}).single("file");
+
+// Multer configuration for batch uploads
+const batchUpload = multer({
+  storage: storage,
+  limits: {
+    fileSize: CONFIG.batchProcessing.maxFileSize,
+    files: CONFIG.batchProcessing.maxFiles,
+  },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype === "application/json") {
+      cb(null, true);
+    } else {
+      cb(new Error("Only JSON files are allowed"));
+    }
+  },
+}).array("files", CONFIG.batchProcessing.maxFiles);
+
+// Cleanup function for uploaded files
+async function cleanupUploadedFiles(files) {
+  if (!Array.isArray(files)) files = [files];
+
+  for (const file of files) {
+    try {
+      if (file && file.path) {
+        await fs.unlink(file.path);
+      }
+    } catch (error) {
+      console.warn(`Failed to cleanup file ${file.path}:`, error);
+    }
+  }
+}
+
+// Helper function to validate source data
+function validateSourceData(data) {
+  const requiredKeys = ["course", "units", "activities", "competencies"];
+  const missingKeys = requiredKeys.filter((key) => !data[key]);
+
+  if (missingKeys.length > 0) {
+    throw new Error(
+      `Source data missing required keys: ${missingKeys.join(", ")}`
+    );
+  }
+
+  if (!Array.isArray(data.activities)) {
+    throw new Error("Source data activities must be an array");
+  }
+
+  data.activities.forEach((activity, index) => {
+    if (!activity.activity || !activity.activity.id) {
+      throw new Error(`Invalid activity object at index ${index}`);
+    }
+  });
+}
 
 // Helper function to validate activity data
 function validateActivityData(weeks, competencies) {
@@ -136,53 +256,25 @@ function validateActivityData(weeks, competencies) {
   };
 }
 
-// Helper function to validate source data
-function validateSourceData(data) {
-  const requiredKeys = ["course", "units", "activities", "competencies"];
-  const missingKeys = requiredKeys.filter((key) => !data[key]);
-
-  if (missingKeys.length > 0) {
-    throw new Error(
-      `Source data missing required keys: ${missingKeys.join(", ")}`
-    );
-  }
-
-  if (!Array.isArray(data.activities)) {
-    throw new Error("Source data activities must be an array");
-  }
-
-  data.activities.forEach((activity, index) => {
-    if (!activity.activity || !activity.activity.id) {
-      throw new Error(`Invalid activity object at index ${index}`);
-    }
-  });
-}
-
 // Main transformation function
 async function transformCourseData(sourceData, inputFilename) {
-  const timestamp = getTimestamp();
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   console.log(`Starting transformation process at ${timestamp}`);
 
   try {
-    // Validate source data
     console.log("Validating source data...");
     validateSourceData(sourceData);
 
-    // Create output filename based on input filename
     const outputFilename = inputFilename.replace(/\.json$/, "_output.json");
     const outputPath = path.join(CONFIG.outputDir, outputFilename);
 
-    // Transform the data
     console.log("Transforming data...");
     const transformer = new CourseTransformer(sourceData, outputPath);
     const transformedData = await transformer.transform();
-    const analytics = transformer.generateActivityAnalytics();
 
-    // Validate transformed data
     console.log("Validating transformed data...");
     validateTransformedData(transformedData);
 
-    // Validate activities if enabled
     if (CONFIG.validateActivities) {
       console.log("Validating activities...");
       const activityValidation = validateActivityData(
@@ -196,44 +288,6 @@ async function transformCourseData(sourceData, inputFilename) {
           console.warn(`- ${issue}`)
         );
       }
-
-      if (
-        activityValidation.totalUniqueActivities !==
-        transformedData.activityCounts.total
-      ) {
-        console.warn(
-          `\nActivity count mismatch: unique=${activityValidation.totalUniqueActivities}, reported=${transformedData.activityCounts.total}, actual=${activityValidation.actualTotal}`
-        );
-      }
-    }
-
-    // Log success metrics
-    if (CONFIG.detailedLogging) {
-      console.log("\nTransformation completed successfully!");
-      console.log("\nCourse Summary:");
-      console.log(
-        `- Course: ${transformedData.course.number} - ${transformedData.course.name}`
-      );
-      console.log(`- Total Weeks: ${transformedData.weeks.length}`);
-      console.log(
-        `- Total Activities: ${transformedData.activityCounts.total}`
-      );
-
-      console.log("\nActivity Distribution:");
-      Object.entries(transformedData.activityCounts.byType).forEach(
-        ([type, count]) => {
-          console.log(`- ${type}: ${count}`);
-        }
-      );
-
-      console.log("\nWeekly Breakdown:");
-      transformedData.weeks.forEach((week) => {
-        console.log(`\nWeek ${week.weekNumber}: ${week.title}`);
-        console.log(`Total Activities: ${week.activities.length}`);
-        week.activities.forEach((activity) => {
-          console.log(`- [${activity.code}] ${activity.title}`);
-        });
-      });
     }
 
     return {
@@ -242,12 +296,7 @@ async function transformCourseData(sourceData, inputFilename) {
       outputPath,
     };
   } catch (error) {
-    console.error("\nError during transformation process:");
-    console.error("-----------------------------------");
-    console.error(`Type: ${error.name}`);
-    console.error(`Message: ${error.message}`);
-    console.error(`Stack: ${error.stack}`);
-
+    console.error("\nError during transformation:", error);
     return {
       success: false,
       error: error.message,
@@ -255,33 +304,27 @@ async function transformCourseData(sourceData, inputFilename) {
   }
 }
 
-// Set up Express server
-const app = express();
-const storage = multer.memoryStorage();
-const upload = multer({ storage: storage });
+// API Routes
 
-app.use(cors());
-app.use(express.json());
-
-// API endpoint for course transformation
-app.post("/api/transform", upload.single("file"), async (req, res) => {
+// Single file transformation
+app.post("/api/transform", singleUpload, async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: "No file uploaded" });
     }
 
     console.log("Processing file:", req.file.originalname);
-    const jsonData = JSON.parse(req.file.buffer.toString());
+    const fileContent = await fs.readFile(req.file.path, "utf8");
+    const jsonData = JSON.parse(fileContent);
     const result = await transformCourseData(jsonData, req.file.originalname);
 
+    await cleanupUploadedFiles(req.file);
+
     if (result.success) {
-      console.log("Transformation successful, generating analytics...");
       const transformer = new CourseTransformer(jsonData, result.outputPath);
       const analytics = transformer.generateActivityAnalytics();
 
-      console.log("Analytics generated:", Object.keys(analytics));
-
-      const responseData = {
+      res.json({
         success: true,
         message: "Transformation completed successfully",
         outputPath: result.outputPath,
@@ -289,22 +332,17 @@ app.post("/api/transform", upload.single("file"), async (req, res) => {
           ...result.data,
           analytics,
         },
-      };
-
-      console.log(
-        "Sending response with data structure:",
-        Object.keys(responseData.data)
-      );
-
-      res.json(responseData);
+      });
     } else {
-      console.log("Transformation failed:", result.error);
       res.status(400).json({
         success: false,
         error: result.error,
       });
     }
   } catch (error) {
+    if (req.file) {
+      await cleanupUploadedFiles(req.file);
+    }
     console.error("Error during transformation:", error);
     res.status(500).json({
       success: false,
@@ -313,71 +351,68 @@ app.post("/api/transform", upload.single("file"), async (req, res) => {
   }
 });
 
-// Download endpoint for transformed files
-app.get("/api/download/:filename", async (req, res) => {
+// Batch transformation
+app.post("/api/transform/batch", batchUpload, async (req, res) => {
   try {
-    const filePath = path.join(CONFIG.outputDir, req.params.filename);
-    res.download(filePath);
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: "Error downloading file",
-    });
-  }
-});
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: "No files uploaded" });
+    }
 
-// Get list of transformed files
-app.get("/api/files", async (req, res) => {
-  try {
-    const files = await fs.readdir(CONFIG.outputDir);
+    const processor = new BatchProcessor(CONFIG.uploadsDir, CONFIG.outputDir);
+    const results = await processor.processDirectory();
+
+    await cleanupUploadedFiles(req.files);
+
     res.json({
       success: true,
-      files: files.filter((file) => file.endsWith("_output.json")),
+      results: {
+        successCount: results.successful.length,
+        failureCount: results.failed.length,
+        totalProcessed: results.totalProcessed,
+        processingTime: results.endTime - results.startTime,
+        successful: results.successful,
+        failed: results.failed,
+      },
     });
   } catch (error) {
+    if (req.files) {
+      await cleanupUploadedFiles(req.files);
+    }
     res.status(500).json({
       success: false,
-      error: "Error reading files directory",
+      error: error.message,
     });
   }
 });
 
-// Start the server
-const startServer = (port) => {
-  const server = app
-    .listen(port)
-    .on("error", (err) => {
-      if (err.code === "EADDRINUSE") {
-        console.log(`Port ${port} is busy, trying ${port + 1}...`);
-        server.close();
-        startServer(port + 1);
-      } else {
-        console.error("Server error:", err);
-      }
-    })
-    .on("listening", () => {
-      console.log(`Server running on port ${port}`);
+// File management routes
+app.get("/api/files", async (req, res) => {
+  try {
+    const options = {
+      search: req.query.search,
+      sortBy: req.query.sortBy,
+      sortOrder: req.query.sortOrder,
+      filter: {
+        dateRange: req.query.dateRange ? JSON.parse(req.query.dateRange) : null,
+        courseType: req.query.courseType,
+      },
+      page: parseInt(req.query.page) || 1,
+      limit: parseInt(req.query.limit) || 20,
+    };
+
+    const result = await fileManager.getFilesList(options);
+    res.json({
+      success: true,
+      ...result,
     });
-};
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
 
-// Create output directory if it doesn't exist
-fs.mkdir(CONFIG.outputDir, { recursive: true })
-  .then(() => {
-    console.log(`Output directory created/verified at: ${CONFIG.outputDir}`);
-    startServer(3000);
-  })
-  .catch((error) => {
-    console.error("Error creating output directory:", error);
-    process.exit(1);
-  });
-
-// Export for use as a module
-module.exports = {
-  transformCourseData,
-  CONFIG,
-};
-
-// Endpoint to load transformed file content
 app.get("/api/files/:filename", async (req, res) => {
   try {
     const filePath = path.join(CONFIG.outputDir, req.params.filename);
@@ -395,3 +430,78 @@ app.get("/api/files/:filename", async (req, res) => {
     });
   }
 });
+
+app.get("/api/files/:filename/metadata", async (req, res) => {
+  try {
+    const metadata = await fileManager.getFileMetadata(req.params.filename);
+    if (!metadata) {
+      return res.status(404).json({
+        success: false,
+        error: "File not found",
+      });
+    }
+    res.json({
+      success: true,
+      metadata,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+app.delete("/api/files/:filename", async (req, res) => {
+  try {
+    await fileManager.deleteFile(req.params.filename);
+    res.json({
+      success: true,
+      message: "File deleted successfully",
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// Download endpoint
+app.get("/api/download/:filename", async (req, res) => {
+  try {
+    const filePath = path.join(CONFIG.outputDir, req.params.filename);
+    res.download(filePath);
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: "Error downloading file",
+    });
+  }
+});
+
+// Ensure required directories exist
+Promise.all([
+  fs.mkdir(CONFIG.outputDir, { recursive: true }),
+  fs.mkdir(CONFIG.uploadsDir, { recursive: true }),
+])
+  .then(() => {
+    console.log("Required directories created/verified:");
+    console.log(`- Output directory: ${CONFIG.outputDir}`);
+    console.log(`- Uploads directory: ${CONFIG.uploadsDir}`);
+    // Start the server after directories are created
+    const port = 3000;
+    app.listen(port, () => {
+      console.log(`Server running on port ${port}`);
+    });
+  })
+  .catch((error) => {
+    console.error("Error creating required directories:", error);
+    process.exit(1);
+  });
+
+// Export for use as a module
+module.exports = {
+  transformCourseData,
+  CONFIG,
+};
