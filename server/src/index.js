@@ -23,7 +23,7 @@ const CONFIG = {
   batchProcessing: {
     concurrentLimit: 3,
     maxFileSize: 50 * 1024 * 1024, // 50MB
-    maxFiles: 10,
+    maxFiles: 50,
   },
   activityValidation: {
     requireText: true,
@@ -100,7 +100,7 @@ const batchUpload = multer({
   storage: storage,
   limits: {
     fileSize: CONFIG.batchProcessing.maxFileSize,
-    files: CONFIG.batchProcessing.maxFiles,
+    files: 50, // Increase this number to handle larger batches
   },
   fileFilter: (req, file, cb) => {
     if (file.mimetype === "application/json") {
@@ -109,7 +109,74 @@ const batchUpload = multer({
       cb(new Error("Only JSON files are allowed"));
     }
   },
-}).array("files", CONFIG.batchProcessing.maxFiles);
+}).array("files");
+
+// Update the batch processing endpoint to handle errors better
+app.post("/api/transform/batch", async (req, res) => {
+  batchUpload(req, res, async (err) => {
+    try {
+      if (err instanceof multer.MulterError) {
+        if (err.code === "LIMIT_FILE_SIZE") {
+          return res.status(400).json({
+            success: false,
+            error: `File size exceeds limit of ${
+              CONFIG.batchProcessing.maxFileSize / (1024 * 1024)
+            }MB`,
+          });
+        }
+        if (err.code === "LIMIT_FILE_COUNT") {
+          return res.status(400).json({
+            success: false,
+            error: `Maximum number of files (${CONFIG.batchProcessing.maxFiles}) exceeded`,
+          });
+        }
+        return res.status(400).json({
+          success: false,
+          error: err.message,
+        });
+      } else if (err) {
+        return res.status(500).json({
+          success: false,
+          error: err.message,
+        });
+      }
+
+      if (!req.files || req.files.length === 0) {
+        return res.status(400).json({ error: "No files uploaded" });
+      }
+
+      const processor = new BatchProcessor(CONFIG.uploadsDir, CONFIG.outputDir);
+
+      const results = await processor.processDirectory();
+
+      // Clean up uploaded files
+      await cleanupUploadedFiles(req.files);
+
+      res.json({
+        success: true,
+        results: {
+          successCount: results.successful.length,
+          failureCount: results.failed.length,
+          totalProcessed: results.totalProcessed,
+          processingTime: results.endTime - results.startTime,
+          successful: results.successful,
+          failed: results.failed,
+        },
+      });
+    } catch (error) {
+      // Clean up files even if there's an error
+      if (req.files) {
+        await cleanupUploadedFiles(req.files);
+      }
+
+      console.error("Batch processing error:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Internal server error",
+      });
+    }
+  });
+});
 
 // Cleanup function for uploaded files
 async function cleanupUploadedFiles(files) {

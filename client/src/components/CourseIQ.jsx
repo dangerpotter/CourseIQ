@@ -235,8 +235,8 @@ const CourseIQ = () => {
       setIsLoading(true);
       setError(null);
       setBatchProgress({
-        processed: 0,
         total: files.length,
+        processed: 0,
         successful: [],
         failed: [],
       });
@@ -252,25 +252,49 @@ const CourseIQ = () => {
         }
       );
 
-      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      let result;
+      const contentType = response.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        result = await response.json();
+      } else {
+        // Handle non-JSON response
+        const text = await response.text();
+        console.error("Received non-JSON response:", text);
+        throw new Error("Server returned non-JSON response");
+      }
 
       if (result.success) {
         setBatchProgress({
           processed: result.results.totalProcessed,
           total: files.length,
-          successful: result.results.successful,
-          failed: result.results.failed,
+          successful: result.results.successful || [],
+          failed: result.results.failed || [],
         });
-        fetchTransformedFiles();
+
+        // Add delay before fetching updated files
+        setTimeout(() => {
+          fetchTransformedFiles();
+        }, 1000);
+
+        if (result.results.failed && result.results.failed.length > 0) {
+          setError(
+            `${result.results.failed.length} files failed to process. Check console for details.`
+          );
+          console.error("Failed files:", result.results.failed);
+        }
       } else {
-        setError(result.error || "Batch processing failed");
+        throw new Error(result.error || "Batch processing failed");
       }
     } catch (err) {
       console.error("Error during batch processing:", err);
-      setError(err.message);
+      setError(`Batch processing error: ${err.message}`);
     } finally {
       setIsLoading(false);
-      event.target.value = "";
+      event.target.value = ""; // Clear the file input
     }
   };
 
