@@ -14,10 +14,16 @@ const FileManager = require("./fileManager");
 // Initialize Express app
 const app = express();
 
+// Environment variables with defaults
+const OUTPUT_DIR = process.env.OUTPUT_DIR || path.join(__dirname, "..", "output");
+const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, "..", "uploads");
+const NODE_ENV = process.env.NODE_ENV || 'development';
+
 // Configuration
 const CONFIG = {
-  outputDir: path.join(__dirname, "..", "output"),
-  uploadsDir: path.join(__dirname, "..", "uploads"),
+  outputDir: OUTPUT_DIR,
+  uploadsDir: UPLOAD_DIR,
+  environment: NODE_ENV,
   createBackup: true,
   validateActivities: true,
   batchProcessing: {
@@ -32,7 +38,7 @@ const CONFIG = {
     requireActivityCode: true,
     enforceTypeOrder: true,
   },
-  detailedLogging: true,
+  detailedLogging: NODE_ENV === 'development',
   caching: {
     enabled: true,
     duration: 5 * 60 * 1000, // 5 minutes
@@ -110,73 +116,6 @@ const batchUpload = multer({
     }
   },
 }).array("files");
-
-// Update the batch processing endpoint to handle errors better
-app.post("/api/transform/batch", async (req, res) => {
-  batchUpload(req, res, async (err) => {
-    try {
-      if (err instanceof multer.MulterError) {
-        if (err.code === "LIMIT_FILE_SIZE") {
-          return res.status(400).json({
-            success: false,
-            error: `File size exceeds limit of ${
-              CONFIG.batchProcessing.maxFileSize / (1024 * 1024)
-            }MB`,
-          });
-        }
-        if (err.code === "LIMIT_FILE_COUNT") {
-          return res.status(400).json({
-            success: false,
-            error: `Maximum number of files (${CONFIG.batchProcessing.maxFiles}) exceeded`,
-          });
-        }
-        return res.status(400).json({
-          success: false,
-          error: err.message,
-        });
-      } else if (err) {
-        return res.status(500).json({
-          success: false,
-          error: err.message,
-        });
-      }
-
-      if (!req.files || req.files.length === 0) {
-        return res.status(400).json({ error: "No files uploaded" });
-      }
-
-      const processor = new BatchProcessor(CONFIG.uploadsDir, CONFIG.outputDir);
-
-      const results = await processor.processDirectory();
-
-      // Clean up uploaded files
-      await cleanupUploadedFiles(req.files);
-
-      res.json({
-        success: true,
-        results: {
-          successCount: results.successful.length,
-          failureCount: results.failed.length,
-          totalProcessed: results.totalProcessed,
-          processingTime: results.endTime - results.startTime,
-          successful: results.successful,
-          failed: results.failed,
-        },
-      });
-    } catch (error) {
-      // Clean up files even if there's an error
-      if (req.files) {
-        await cleanupUploadedFiles(req.files);
-      }
-
-      console.error("Batch processing error:", error);
-      res.status(500).json({
-        success: false,
-        error: error.message || "Internal server error",
-      });
-    }
-  });
-});
 
 // Cleanup function for uploaded files
 async function cleanupUploadedFiles(files) {
@@ -391,6 +330,9 @@ app.post("/api/transform", singleUpload, async (req, res) => {
       const transformer = new CourseTransformer(jsonData, result.outputPath);
       const analytics = transformer.generateActivityAnalytics();
 
+      // Invalidate file cache after processing
+      fileManager.invalidateCache();
+
       res.json({
         success: true,
         message: "Transformation completed successfully",
@@ -418,38 +360,92 @@ app.post("/api/transform", singleUpload, async (req, res) => {
   }
 });
 
-// Batch transformation
-app.post("/api/transform/batch", batchUpload, async (req, res) => {
-  try {
-    if (!req.files || req.files.length === 0) {
-      return res.status(400).json({ error: "No files uploaded" });
-    }
+// Batch transformation endpoint
+app.post("/api/transform/batch", async (req, res) => {
+  batchUpload(req, res, async (err) => {
+    try {
+      // Handle multer errors
+      if (err instanceof multer.MulterError) {
+        if (err.code === "LIMIT_FILE_SIZE") {
+          return res.status(400).json({
+            success: false,
+            error: `File size exceeds limit of ${CONFIG.batchProcessing.maxFileSize / (1024 * 1024)}MB`,
+          });
+        }
+        if (err.code === "LIMIT_FILE_COUNT") {
+          return res.status(400).json({
+            success: false,
+            error: `Maximum number of files (${CONFIG.batchProcessing.maxFiles}) exceeded`,
+          });
+        }
+        return res.status(400).json({
+          success: false,
+          error: err.message,
+        });
+      } else if (err) {
+        return res.status(500).json({
+          success: false,
+          error: err.message,
+        });
+      }
 
-    const processor = new BatchProcessor(CONFIG.uploadsDir, CONFIG.outputDir);
-    const results = await processor.processDirectory();
+      // Validate request
+      if (!req.files || req.files.length === 0) {
+        return res.status(400).json({ error: "No files uploaded" });
+      }
 
-    await cleanupUploadedFiles(req.files);
+      // Ensure directories exist
+      await Promise.all([
+        fs.mkdir(CONFIG.outputDir, { recursive: true }),
+        fs.mkdir(CONFIG.uploadsDir, { recursive: true }),
+      ]);
 
-    res.json({
-      success: true,
-      results: {
-        successCount: results.successful.length,
-        failureCount: results.failed.length,
-        totalProcessed: results.totalProcessed,
-        processingTime: results.endTime - results.startTime,
-        successful: results.successful,
-        failed: results.failed,
-      },
-    });
-  } catch (error) {
-    if (req.files) {
+      // Initialize processor and process files
+      const processor = new BatchProcessor(CONFIG.uploadsDir, CONFIG.outputDir);
+      console.log(`Starting batch processing of ${req.files.length} files...`);
+      
+      const results = await processor.processDirectory();
+      console.log("Batch processing completed");
+
+      // Clean up uploaded files
       await cleanupUploadedFiles(req.files);
+      console.log("Cleaned up temporary files");
+
+      // Invalidate file cache after processing
+      fileManager.invalidateCache();
+
+      // Send response
+      res.json({
+        success: true,
+        results: {
+          successCount: results.successful.length,
+          failureCount: results.failed.length,
+          totalProcessed: results.totalProcessed,
+          processingTime: results.endTime - results.startTime,
+          successful: results.successful,
+          failed: results.failed,
+        },
+      });
+    } catch (error) {
+      console.error("Batch processing error:", error);
+      
+      // Clean up files even if there's an error
+      if (req.files) {
+        try {
+          await cleanupUploadedFiles(req.files);
+          console.log("Cleaned up temporary files after error");
+        } catch (cleanupError) {
+          console.error("Error during cleanup:", cleanupError);
+        }
+      }
+
+      res.status(500).json({
+        success: false,
+        error: error.message || "Internal server error",
+        details: error.stack,
+      });
     }
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
-  }
+  });
 });
 
 // File management routes
@@ -534,6 +530,11 @@ app.delete("/api/files/:filename", async (req, res) => {
   }
 });
 
+// Health check endpoint
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "healthy" });
+});
+
 // Download endpoint
 app.get("/api/download/:filename", async (req, res) => {
   try {
@@ -545,6 +546,20 @@ app.get("/api/download/:filename", async (req, res) => {
       error: "Error downloading file",
     });
   }
+});
+
+// System information endpoint
+app.get("/api/system", (req, res) => {
+  res.json({
+    environment: CONFIG.environment,
+    version: require('../package.json').version,
+    uptime: process.uptime(),
+    memory: process.memoryUsage(),
+    directories: {
+      output: CONFIG.outputDir,
+      uploads: CONFIG.uploadsDir
+    }
+  });
 });
 
 // Ensure required directories exist

@@ -205,7 +205,7 @@ const CourseIQ = () => {
       if (result.success) {
         console.log("Setting transformed data:", result.data);
         setTransformedData(result.data);
-        fetchTransformedFiles(); // Refresh file list
+        await fetchTransformedFiles(); // Refresh file list immediately
       } else {
         setError(result.error || "Transformation failed");
       }
@@ -275,10 +275,8 @@ const CourseIQ = () => {
           failed: result.results.failed || [],
         });
 
-        // Add delay before fetching updated files
-        setTimeout(() => {
-          fetchTransformedFiles();
-        }, 1000);
+        // Refresh file list immediately after batch processing
+        await fetchTransformedFiles();
 
         if (result.results.failed && result.results.failed.length > 0) {
           setError(

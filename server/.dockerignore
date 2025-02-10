@@ -1,0 +1,27 @@
+# Dependencies
+node_modules
+npm-debug.log
+
+# Runtime data
+uploads/*
+output/*
+
+# Version control
+.git
+.gitignore
+
+# Environment
+.env
+.env.*
+
+# IDE
+.vscode
+.idea
+
+# Logs
+logs
+*.log
+
+# System Files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  courseiq-server:
+    build: 
+      context: ./server
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      - courseiq-uploads:/app/uploads
+      - courseiq-output:/app/output
+    environment:
+      - NODE_ENV=production
+      - UPLOAD_DIR=/app/uploads
+      - OUTPUT_DIR=/app/output
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    networks:
+      - courseiq-network
+
+  courseiq-client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://courseiq-server:3000
+    depends_on:
+      courseiq-server:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - courseiq-network
+
+volumes:
+  courseiq-uploads:
+    driver: local
+  courseiq-output:
+    driver: local
+
+networks:
+  courseiq-network:
+    driver: bridge

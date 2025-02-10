@@ -11,6 +11,12 @@ class FileManager {
     this.cacheLifetime = 5 * 60 * 1000; // 5 minutes
   }
 
+  // Force cache invalidation when new files are processed
+  invalidateCache() {
+    this.lastCacheUpdate = null;
+    this.fileCache.clear();
+  }
+
   async getFilesList(options = {}) {
     const {
       search = "",
