@@ -18,9 +18,18 @@ CourseIQ is a sophisticated course analysis tool that transforms complex course 
 - 📈 Weekly content distribution insights
 - 🎯 Competency mapping and tracking
 - 🔍 Advanced file search and filtering
-- 📦 Batch processing capabilities
+- 📦 Batch processing with real-time progress tracking
 - 🏷️ Intelligent file organization by course type
-- 💾 Automatic file cleanup and management
+- 💾 Efficient file caching and management
+- 🔄 Real-time file list updates
+- 🎨 Course type-based filtering (Guided Path, Flex Path, Custom)
+- 📅 Date-based sorting and filtering
+- 🔎 Full-text search across course content
+- 📋 Detailed activity breakdowns by type
+- 📊 Interactive competency tracking
+- 🌓 System-wide dark mode support
+- 🔍 Advanced search with multiple criteria
+- 📱 Responsive design for all screen sizes
 
 ## Getting Started
 
@@ -28,6 +37,7 @@ CourseIQ is a sophisticated course analysis tool that transforms complex course 
 
 - Node.js (v14.0.0 or higher)
 - npm (v6.0.0 or higher)
+- Docker (optional, for containerized deployment)
 
 ### Installation
 
@@ -54,6 +64,8 @@ npm install
 
 ### Running the Application
 
+#### Standard Method
+
 1. Start the server:
 
 ```bash
@@ -69,6 +81,16 @@ npm run dev
 ```
 
 3. Open [http://localhost:5173](http://localhost:5173) in your browser
+
+#### Docker Method
+
+1. Build and run using Docker Compose:
+
+```bash
+docker-compose up --build
+```
+
+2. Open [http://localhost:5173](http://localhost:5173) in your browser
 
 ## Project Structure
 
@@ -103,61 +125,62 @@ courseiq/
 ### Server-side
 
 - `data_transformer.js`: Core transformation logic for course data
-
   - Handles course structure analysis
   - Validates input data
   - Generates detailed analytics
   - Manages file operations
 
 - `fileManager.js`: Enhanced file management system
+  - Smart caching system with invalidation
+  - Real-time file list updates
+  - Advanced filtering and sorting
+  - Metadata caching for performance
+  - Course type categorization
 
-  - Handles file organization and search
-  - Caches file metadata for performance
-  - Provides filtering and sorting capabilities
-
-- `batchProcessor.js`: Batch processing functionality
-
-  - Handles concurrent file processing
-  - Manages processing queues
-  - Provides progress tracking
-  - Implements error handling
+- `batchProcessor.js`: Advanced batch processing
+  - Concurrent file processing
+  - Real-time progress tracking
+  - Detailed success/failure reporting
+  - Automatic cleanup
+  - Error recovery
 
 - `index.js`: Express server setup
-  - API endpoints for file operations
+  - RESTful API endpoints
   - File upload handling
-  - Data transformation routing
-  - Batch processing coordination
+  - Cache management
+  - Error handling
+  - Progress reporting
 
 ### Client-side
 
 - `CourseIQ.jsx`: Main application component
+  - Real-time file list updates
+  - Advanced filtering interface
+  - Progress tracking
+  - Dark mode support
+  - Responsive design
 
-  - File upload interface
-  - Navigation and layout
-  - Data visualization coordination
-  - Batch processing interface
-  - File management UI
-
-- `Analytics.jsx`: Analytics visualization component
-  - Interactive charts and graphs
+- `Analytics.jsx`: Analytics visualization
+  - Interactive charts
   - Course statistics
-  - Activity distribution analysis
+  - Activity distribution
+  - Competency tracking
 
 ## API Endpoints
 
 - `POST /api/transform`: Transform single course JSON
-- `POST /api/transform/batch`: Transform multiple course JSONs
-- `GET /api/files`: List transformed files with search and filter options
+- `POST /api/transform/batch`: Transform multiple course JSONs with progress tracking
+- `GET /api/files`: List transformed files with advanced filtering
 - `GET /api/files/:filename`: Get specific transformed file
 - `GET /api/files/:filename/metadata`: Get file metadata
 - `GET /api/download/:filename`: Download transformed file
 - `DELETE /api/files/:filename`: Delete transformed file
+- `GET /api/system`: Get system information and status
 
 ## Technology Stack
 
 - **Frontend**:
-
-  - React
+  - React 18
   - Vite
   - TailwindCSS
   - shadcn/ui
@@ -169,6 +192,35 @@ courseiq/
   - Express
   - Lodash
   - Multer
+
+- **Development & Deployment**:
+  - Docker
+  - Docker Compose
+  - ESLint
+  - Prettier
+
+## Features in Detail
+
+### File Management
+- Smart caching system for optimal performance
+- Real-time file list updates
+- Advanced filtering by course type and date
+- Full-text search capabilities
+- Batch processing with progress tracking
+
+### Course Analysis
+- Detailed activity breakdowns
+- Competency tracking and mapping
+- Weekly content distribution analysis
+- Points and grading analysis
+- Resource tracking
+
+### User Interface
+- Dark mode support
+- Responsive design
+- Real-time progress tracking
+- Advanced filtering interface
+- Interactive visualizations
 
 ## Contributing
 
@@ -185,7 +237,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Author
 
 **Austin Potter**
-
 - GitHub: [@dangerpotter](https://github.com/dangerpotter)
 
 ## Acknowledgments
