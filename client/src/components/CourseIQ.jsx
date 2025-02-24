@@ -115,7 +115,7 @@ const CourseIQ = () => {
       });
 
       const response = await fetch(
-        `http://localhost:3000/api/files?${queryParams}`
+        `${import.meta.env.VITE_API_URL}/api/files?${queryParams}`
       );
       const data = await response.json();
 
@@ -195,10 +195,13 @@ const CourseIQ = () => {
       const formData = new FormData();
       formData.append("file", file);
 
-      const response = await fetch("http://localhost:3000/api/transform", {
-        method: "POST",
-        body: formData,
-      });
+      const response = await fetch(
+        "${import.meta.env.VITE_API_URL}/api/transform",
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
 
       const result = await response.json();
 
@@ -245,7 +248,7 @@ const CourseIQ = () => {
       files.forEach((file) => formData.append("files", file));
 
       const response = await fetch(
-        "http://localhost:3000/api/transform/batch",
+        "${import.meta.env.VITE_API_URL}/api/transform/batch",
         {
           method: "POST",
           body: formData,
@@ -303,7 +306,9 @@ const CourseIQ = () => {
       setError(null);
 
       const response = await fetch(
-        `http://localhost:3000/api/files/${encodeURIComponent(filename)}`
+        `${import.meta.env.VITE_API_URL}/api/files/${encodeURIComponent(
+          filename
+        )}`
       );
       const result = await response.json();
 
@@ -324,7 +329,10 @@ const CourseIQ = () => {
   // Handle file download
   const downloadTransformedFile = async (filename) => {
     try {
-      window.open(`http://localhost:3000/api/download/${filename}`, "_blank");
+      window.open(
+        `${import.meta.env.VITE_API_URL}/api/download/${filename}`,
+        "_blank"
+      );
     } catch (error) {
       console.error("Error downloading file:", error);
       setError("Error downloading file");
