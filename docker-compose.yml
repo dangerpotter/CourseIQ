@@ -30,6 +30,7 @@ services:
       retries: 3
     networks:
       - courseiq-network
+      - reverse-proxy
 
   courseiq-client:
     build:
@@ -38,13 +39,14 @@ services:
     ports:
       - "5173:5173"
     environment:
-      - VITE_API_URL=http://courseiq-server:3000
+      - VITE_API_URL=/courseiq/api
     depends_on:
       courseiq-server:
         condition: service_healthy
     restart: unless-stopped
     networks:
       - courseiq-network
+      - reverse-proxy
 
 volumes:
   courseiq-uploads:
@@ -55,3 +57,5 @@ volumes:
 networks:
   courseiq-network:
     driver: bridge
+  reverse-proxy:
+    external: true
