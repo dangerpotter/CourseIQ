@@ -1,23 +1,19 @@
-FROM node:18-alpine
-
-# Create app directory
+FROM node:18-alpine as builder
 WORKDIR /app
-
-# Install app dependencies
 COPY package*.json ./
 RUN npm install
-
-# Bundle app source
 COPY . .
+
+# Make environment variable available during build
+ARG VITE_API_URL=/courseiq/api
+ENV VITE_API_URL=${VITE_API_URL}
 
 # Build the app
 RUN npm run build
 
-# Install serve to run the built app
-RUN npm install -g serve
-
-# Expose port
-EXPOSE 5173
-
-# Start the application
-CMD ["npm", "run", "dev", "--", "--host"]
+# Serve the built application
+FROM nginx:alpine
+COPY --from=builder /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]

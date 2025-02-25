@@ -14,6 +14,7 @@ services:
       - NODE_ENV=production
       - UPLOAD_DIR=/app/uploads
       - OUTPUT_DIR=/app/output
+      - BASE_PATH=/api
     restart: unless-stopped
     healthcheck:
       test:
@@ -36,6 +37,8 @@ services:
     build:
       context: ./client
       dockerfile: Dockerfile
+      args:
+        - VITE_API_URL=/courseiq/api
     ports:
       - "5173:5173"
     environment:

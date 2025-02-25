@@ -14,6 +14,18 @@ const FileManager = require("./fileManager");
 // Initialize Express app
 const app = express();
 
+// Base path handling for reverse proxy
+const BASE_PATH = process.env.BASE_PATH || '';
+console.log(`Using API base path: ${BASE_PATH || '/'}`);
+
+// Use the base path for all routes
+if (BASE_PATH) {
+  // Add a redirect from / to the base path
+  app.get('/', (req, res) => {
+    res.redirect(BASE_PATH);
+  });
+}
+
 // Environment variables with defaults
 const OUTPUT_DIR = process.env.OUTPUT_DIR || path.join(__dirname, "..", "output");
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, "..", "uploads");
