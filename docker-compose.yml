@@ -23,7 +23,7 @@ services:
           "--no-verbose",
           "--tries=1",
           "--spider",
-          "${import.meta.env.VITE_API_URL}/health",
+          "http://localhost:3000/health",
         ]
       interval: 30s
       timeout: 3s

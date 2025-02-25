@@ -196,7 +196,7 @@ const CourseIQ = () => {
       formData.append("file", file);
 
       const response = await fetch(
-        "${import.meta.env.VITE_API_URL}/api/transform",
+        `${import.meta.env.VITE_API_URL}/api/transform`,
         {
           method: "POST",
           body: formData,
@@ -248,7 +248,7 @@ const CourseIQ = () => {
       files.forEach((file) => formData.append("files", file));
 
       const response = await fetch(
-        "${import.meta.env.VITE_API_URL}/api/transform/batch",
+        `${import.meta.env.VITE_API_URL}/api/transform/batch`,
         {
           method: "POST",
           body: formData,
